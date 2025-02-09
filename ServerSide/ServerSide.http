@@ -1,0 +1,7 @@
+@ServerSide_HostAddress = http://localhost:5244
+
+GET {{ServerSide_HostAddress}}/weatherforecast/https://picsum.photos/300/300?baklava
+Accept: application/json
+
+###
+  

@@ -1,0 +1,796 @@
+﻿@page "/Orders"
+@using System.Globalization
+@using Domain.DataModels
+@using Domain.Database
+@using MauiApp1.service.Interface
+@inject IApiService api
+@inject IJSRuntime JSRuntime
+
+@if (showNotification)
+{
+    <div class="notification @notificationClass">
+        <i class="@notificationIcon"></i>
+        @notificationMessage
+    </div>
+}
+
+@if (showEditModal)
+{
+    <div class="modal-overlay">
+        <div class="modal-content edit-modal">
+            <h2>تعديل الطلب #@selectedOrder?.Id</h2>
+            <form @onsubmit="HandleEditSubmit">
+                <div class="form-group">
+                    <label>اسم العميل</label>
+                    <input type="text" @bind="selectedOrder.CustomerName" required />
+                </div>
+                <div class="form-group">
+                    <label>رقم الهاتف</label>
+                    <input type="tel" @bind="selectedOrder.PhoneNumber" required />
+                </div>
+                <div class="form-group">
+                    <label>حالة الطلب</label>
+                    <select @bind="selectedOrder.Status">
+                        @foreach (var status in filters.Where(f => f != "الكل"))
+                        {
+                            <option value="@status">@status</option>
+                        }
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>الملاحظة</label>
+                    <textarea @bind="selectedOrder.Note" rows="3" placeholder="أدخل الملاحظة هنا..."></textarea>
+                </div>
+                <div class="order-items-edit">
+                    <h3>عناصر الطلب</h3>
+                    @if (selectedOrder.Items is not null && selectedOrder.Items.Any())
+                    {
+                        @foreach (var item in selectedOrder.Items)
+                        {
+                            <div class="order-item-edit">
+                                <span class="item-name">@item.Name</span>
+                                <input type="number" step="0.01" @bind="item.Price" placeholder="السعر" required />
+                            </div>
+                        }
+                    }
+                    else
+                    {
+                        <p>لا توجد عناصر لتعديلها.</p>
+                    }
+                </div>
+                <div class="form-actions">
+                    <button type="button" class="cancel-btn" @onclick="CloseEditModal">إلغاء</button>
+                    <button type="submit" class="save-btn">حفظ التعديلات</button>
+                </div>
+            </form>
+        </div>
+    </div>
+}
+
+<header class="header">
+    <nav class="navbar">
+        <div class="brand">
+            <i class="fas fa-clipboard-check"></i>
+            <h1>إدارة الطلبات</h1>
+        </div>
+        <div class="filters">
+            <div class="filter-dropdown">
+                <button class="filter-toggle" @onclick="ToggleFilters">
+                    <i class="fas fa-filter"></i>
+                    <span>@selectedFilter</span>
+                    <i class="fas fa-angle-down"></i>
+                </button>
+                <div class="filter-menu @(showFilters ? "visible" : "")">
+                    @foreach (var filter in filters)
+                    {
+                        <div class="filter-option @(selectedFilter == filter ? "active" : "")"
+                             @onclick="() => SetFilter(filter)">
+                            <i class="@GetFilterIcon(filter)"></i>
+                            <span>@filter</span>
+                        </div>
+                    }
+                </div>
+            </div>
+        </div>
+    </nav>
+</header>
+
+<main class="orders-list">
+    @if (orders is null)
+    {
+        <p>جاري التحميل...</p>
+    }
+    else if (filteredOrders().Any())
+    {
+        @foreach (var order in filteredOrders())
+        {
+            <article class="order-card @GetStatusClass(order)">
+                <div class="order-header">
+                    <div class="order-meta">
+                        <span class="order-id">#@order.Id</span>
+                        <span class="order-date">
+                            <i class="fas fa-calendar-alt"></i>
+                            @order.OrderDate.ToString("dd MMM yyyy")
+                        </span>
+                    </div>
+                    <div class="order-status @order.Status.ToLower()">
+                        @order.Status
+                    </div>
+                </div>
+                <div class="order-body">
+                    <div class="customer-info">
+                        <div class="customer-details">
+                            <h3><i class="fas fa-user-tag"></i> @order.CustomerName</h3>
+                            <p><i class="fas fa-phone"></i> @order.PhoneNumber</p>
+                        </div>
+                    </div>
+                    <div class="order-items">
+                        @foreach (var item in order.Items)
+                        {
+                            <div class="order-item">
+                                <span class="item-name">@item.Name</span>
+                                <div class="item-meta">
+                                    <span class="item-qty">@item.Quantity x</span>
+                                    <span class="item-price">@item.Price.ToString("C", CultureInfo.CreateSpecificCulture("he-IL"))</span>
+                                </div>
+                            </div>
+                        }
+                    </div>
+                    @if (!string.IsNullOrWhiteSpace(order.Note))
+                    {
+                        <div class="order-note">
+                            <strong>ملاحظة:</strong> @order.Note
+                        </div>
+                    }
+                </div>
+                <div class="order-footer">
+                    <div class="delivery-time">
+                        <i class="fas fa-truck-moving"></i>
+                        <span>@order.DeliveryDate.ToString("dd MMM - hh:mm tt")</span>
+                        <span>المجموع: @order.TotalPrice.ToString("C", CultureInfo.CreateSpecificCulture("he-IL"))</span>
+                    </div>
+                    <div class="order-actions">
+                        @if (order.Status != "مكتمل" && order.Status != "ملغي")
+                        {
+                            <button class="btn-icon edit" @onclick="() => OpenEditModal(order)">
+                                <i class="fas fa-pencil-alt"></i>
+                            </button>
+                            <button class="btn-icon complete" @onclick="(() => CompleteOrder(order))">
+                                <i class="fas fa-check-circle"></i>
+                            </button>
+                        }
+                        <button class="btn-icon delete" @onclick="async () => await ConfirmDelete(order)">
+                            <i class="fas fa-trash-alt"></i>
+                        </button>
+                    </div>
+                </div>
+            </article>
+        }
+    }
+    else
+    {
+        <div class="empty-state">
+            <i class="fas fa-clipboard-list"></i>
+            <p>لا توجد طلبات لعرضها</p>
+        </div>
+    }
+</main>
+
+@code {
+    private List<OrderData> orders;
+    private List<string> filters = new() { "الكل", "قيد التنفيذ", "مكتمل" };
+    private string selectedFilter = "الكل";
+    private bool showFilters = false;
+    private bool showNotification = false;
+    private string notificationMessage = "";
+    private string notificationClass = "";
+    private string notificationIcon = "";
+    private bool showEditModal = false;
+    private OrderData selectedOrder;
+
+    private List<OrderData> filteredOrders()
+    {
+        return selectedFilter == "الكل"
+            ? orders.Where(x => x.Status != "مكتمل").OrderBy(x => x.OrderDate).ToList()
+            : orders.Where(x => x.Status == selectedFilter).OrderBy(x => x.OrderDate).ToList();
+    }
+
+    private decimal CalculateTotal(List<OrderItem> items) => items.Sum(i => i.Price * i.Quantity);
+
+    protected override async Task OnInitializedAsync() => await LoadItems();
+
+    private async Task LoadItems()
+    {
+        orders = (await api.GetOrdersAsync()).Value;
+        StateHasChanged();
+    }
+
+    private void SetFilter(string filter)
+    {
+        selectedFilter = filter;
+        showFilters = false;
+    }
+
+    private void ToggleFilters() => showFilters = !showFilters;
+
+    private string GetFilterIcon(string filter) => filter switch
+    {
+        "الكل" => "fas fa-layer-group",
+        "قيد التنفيذ" => "fas fa-tasks",
+        "مكتمل" => "fas fa-check-circle",
+        _ => "fas fa-filter"
+    };
+
+    private string GetStatusClass(OrderData order) => order.Status switch
+    {
+        "قيد التنفيذ" => "in-progress",
+        "مكتمل" => "completed",
+        _ => ""
+    };
+
+    private async Task CompleteOrder(OrderData order)
+    {
+        await api.EditOrderStatus(order, "مكتمل");
+        await LoadItems();
+        ShowNotification("تم إتمام الطلب بنجاح", "success");
+    }
+
+    private async Task ConfirmDelete(OrderData order)
+    {
+        var confirmed = await JSRuntime.InvokeAsync<bool>("confirm", $"هل أنت متأكد من حذف الطلب #{order.Id}؟");
+        if (confirmed) await CancelOrder(order);
+    }
+
+    private async Task CancelOrder(OrderData order)
+    {
+        try
+        {
+            await api.RemoveOrder(order.Id);
+            await LoadItems();
+            ShowNotification("تم حذف الطلب بنجاح", "success");
+        }
+        catch (Exception ex)
+        {
+            ShowNotification($"خطأ في الحذف: {ex.Message}", "error");
+        }
+    }
+
+    private void OpenEditModal(OrderData order)
+    {
+        // إنشاء نسخة من الطلب لتعديلها دون تغيير القائمة الأصلية قبل الحفظ
+        selectedOrder = new OrderData
+            {
+                Id = order.Id,
+                CustomerName = order.CustomerName,
+                PhoneNumber = order.PhoneNumber,
+                Status = order.Status,
+                Note = order.Note,
+                OrderDate = order.OrderDate,
+                DeliveryDate = order.DeliveryDate,
+                // إنشاء نسخة من قائمة العناصر حتى يمكن تعديل الأسعار
+                Items = order.Items.Select(i => new OrderItem
+                {
+                    Name = i.Name,
+                    Price = i.Price,
+                    Quantity = i.Quantity
+                }).ToList()
+            };
+        showEditModal = true;
+    }
+
+    private void CloseEditModal()
+    {
+        showEditModal = false;
+        selectedOrder = null;
+    }
+
+    private async Task HandleEditSubmit()
+    {
+        try
+        {
+            await api.EditOrder(selectedOrder);
+            await LoadItems();
+            ShowNotification("تم تحديث الطلب بنجاح", "success");
+            CloseEditModal();
+        }
+        catch (Exception ex)
+        {
+            ShowNotification($"خطأ في التحديث: {ex.Message}", "error");
+        }
+    }
+
+    private void ShowNotification(string message, string type)
+    {
+        notificationMessage = message;
+        notificationClass = type;
+        notificationIcon = type switch
+        {
+            "success" => "fas fa-check-circle",
+            "error" => "fas fa-times-circle",
+            _ => "fas fa-info-circle"
+        };
+        showNotification = true;
+        Task.Run(async () =>
+        {
+            await Task.Delay(3000);
+            showNotification = false;
+            StateHasChanged();
+        });
+    }
+}
+<style>
+    :root {
+        --primary: #FF69B4;
+        --secondary: #98FB98;
+        --accent: #FFB6C1;
+        --text: #444;
+        --radius: 16px;
+        --shadow: 0 4px 24px rgba(0,0,0,0.08);
+        --transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    /* ========== HEADER & NAVBAR ========== */
+    .header {
+        background: #ffffff;
+        box-shadow: var(--shadow);
+        position: sticky;
+        top: 0;
+        z-index: 100;
+    }
+
+    .navbar {
+        max-width: 1280px;
+        margin: 0 auto;
+        padding: 1.5rem 2rem;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
+
+    .brand {
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+    }
+
+        .brand i {
+            font-size: 2rem;
+            color: var(--primary);
+        }
+
+        .brand h1 {
+            font-family: 'Tajawal', sans-serif;
+            font-size: 1.75rem;
+            color: var(--text);
+            margin: 0;
+        }
+
+    .filter-dropdown {
+        position: relative;
+    }
+
+    .filter-toggle {
+        background: #f8f9fa;
+        border: 2px solid var(--primary);
+        padding: 0.75rem 1.5rem;
+        border-radius: var(--radius);
+        display: flex;
+        gap: 1rem;
+        align-items: center;
+        cursor: pointer;
+        transition: var(--transition);
+    }
+
+        .filter-toggle:hover {
+            background: var(--accent);
+            transform: translateY(-1px);
+        }
+
+    .filter-menu {
+        position: absolute;
+        top: 120%;
+        right: 0;
+        background: white;
+        border-radius: var(--radius);
+        box-shadow: var(--shadow);
+        min-width: 240px;
+        opacity: 0;
+        visibility: hidden;
+        transform: translateY(10px);
+        transition: var(--transition);
+        z-index: 10;
+    }
+
+        .filter-menu.visible {
+            opacity: 1;
+            visibility: visible;
+            transform: translateY(0);
+        }
+
+    .filter-option {
+        padding: 1rem;
+        display: flex;
+        gap: 1rem;
+        align-items: center;
+        cursor: pointer;
+        transition: var(--transition);
+        border-bottom: 1px solid #f0f0f0;
+    }
+
+        .filter-option:last-child {
+            border-bottom: none;
+        }
+
+        .filter-option:hover {
+            background: #f8f9fa;
+        }
+
+        .filter-option.active {
+            background: var(--primary);
+            color: white;
+        }
+
+    /* ========== ORDERS LIST ========== */
+    .orders-list {
+        max-width: 1280px;
+        margin: 2rem auto;
+        padding: 0 2rem;
+        display: grid;
+        gap: 1.5rem;
+    }
+
+    .order-card {
+        background: white;
+        border-radius: var(--radius);
+        box-shadow: var(--shadow);
+        padding: 2rem;
+        position: relative;
+        transition: var(--transition);
+    }
+
+        .order-card:hover {
+            transform: translateY(-3px);
+        }
+
+    .order-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 1.5rem;
+        padding-bottom: 1.5rem;
+        border-bottom: 2px solid #f0f0f0;
+    }
+
+    .order-meta {
+        display: flex;
+        gap: 1rem;
+        align-items: center;
+    }
+
+    .order-id {
+        font-weight: bold;
+    }
+
+    .order-date {
+        font-size: 0.9rem;
+        color: #666;
+    }
+
+    .order-status {
+        padding: 0.5rem 1.25rem;
+        border-radius: 2rem;
+        font-size: 0.9rem;
+        font-weight: 500;
+    }
+
+        .order-status.معلق {
+            background: #fff0f6;
+            color: #c41d7f;
+            border: 1px solid #ffadd2;
+        }
+
+        .order-status.قيدالتنفيذ {
+            background: #f0faff;
+            color: #08979c;
+            border: 1px solid #87e8de;
+        }
+
+        .order-status.مكتمل {
+            background: #f6ffed;
+            color: #389e0d;
+            border: 1px solid #b7eb8f;
+        }
+
+        .order-status.ملغي {
+            background: #fff1f0;
+            color: #cf1322;
+            border: 1px solid #ffa39e;
+        }
+
+    .customer-details h3 {
+        margin: 0 0 0.5rem;
+        color: var(--text);
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+    }
+
+    .customer-details p {
+        margin: 0;
+        color: #666;
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+    }
+
+    .order-items {
+        margin-bottom: 1.5rem;
+    }
+
+    .order-item {
+        display: flex;
+        justify-content: space-between;
+        padding: 1rem;
+        margin-bottom: 0.5rem;
+        background: #fafafa;
+        border-radius: 8px;
+    }
+
+        .order-item:last-child {
+            margin-bottom: 0;
+        }
+
+    .item-meta {
+        display: flex;
+        gap: 0.5rem;
+        align-items: center;
+    }
+
+    .order-note {
+        background: #fff9e6;
+        border: 1px solid #ffe58f;
+        padding: 0.75rem 1rem;
+        border-radius: 8px;
+        font-size: 0.9rem;
+        color: #8c6d1f;
+        margin-top: 1rem;
+    }
+
+    .order-footer {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-top: 2rem;
+        padding-top: 1.5rem;
+        border-top: 2px solid #f0f0f0;
+    }
+
+    .delivery-time {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        color: #666;
+        font-size: 0.9rem;
+    }
+
+    .order-actions {
+        display: flex;
+        gap: 0.75rem;
+    }
+
+    .btn-icon {
+        width: 36px;
+        height: 36px;
+        border: none;
+        border-radius: 50%;
+        display: grid;
+        place-items: center;
+        cursor: pointer;
+        transition: var(--transition);
+    }
+
+        .btn-icon.edit {
+            background: #fffbe6;
+            color: #faad14;
+        }
+
+        .btn-icon.complete {
+            background: #f6ffed;
+            color: #52c41a;
+        }
+
+        .btn-icon.delete {
+            background: #fff1f0;
+            color: #ff4d4f;
+        }
+
+        .btn-icon:hover {
+            transform: scale(1.1);
+        }
+
+    .empty-state {
+        text-align: center;
+        padding: 4rem;
+        color: #666;
+    }
+
+        .empty-state i {
+            font-size: 4rem;
+            margin-bottom: 1.5rem;
+            opacity: 0.6;
+        }
+
+    /* ========== NOTIFICATION ========== */
+    .notification {
+        position: fixed;
+        top: 20px;
+        left: 50%;
+        transform: translateX(-50%);
+        padding: 1rem 2rem;
+        border-radius: 50px;
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+        z-index: 9999;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+        animation: slideIn 0.3s ease-out;
+    }
+
+        .notification.success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+
+        .notification.error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+
+    @@keyframes slideIn {
+        from
+
+    {
+        top: -100px;
+    }
+
+    to {
+        top: 20px;
+    }
+
+    }
+
+    /* ========== MODAL ========== */
+    .modal-overlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(0,0,0,0.5);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 1000;
+        padding: 1rem;
+    }
+
+    .modal-content {
+        background: white;
+        padding: 2rem;
+        border-radius: var(--radius);
+        width: 90%;
+        max-width: 500px;
+        animation: modalAppear 0.3s ease-out;
+    }
+
+    .edit-modal h2 {
+        margin-bottom: 1rem;
+        text-align: center;
+    }
+
+    .form-group {
+        margin-bottom: 1.5rem;
+    }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 0.5rem;
+            font-weight: bold;
+        }
+
+        .form-group input,
+        .form-group select,
+        .form-group textarea {
+            width: 100%;
+            padding: 0.8rem;
+            border: 2px solid #ddd;
+            border-radius: 8px;
+            font-size: 1rem;
+        }
+
+    .order-items-edit {
+        margin-bottom: 1.5rem;
+    }
+
+        .order-items-edit h3 {
+            margin-bottom: 0.75rem;
+            font-size: 1.1rem;
+            color: var(--text);
+        }
+
+    .order-item-edit {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+        margin-bottom: 0.75rem;
+    }
+
+        .order-item-edit .item-name {
+            flex: 1;
+            font-weight: bold;
+            color: var(--text);
+        }
+
+        .order-item-edit input {
+            width: 120px;
+        }
+
+    .form-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 1rem;
+    }
+
+    .save-btn {
+        background: var(--primary);
+        color: white;
+        padding: 0.8rem 2rem;
+        border: none;
+        border-radius: 8px;
+        cursor: pointer;
+    }
+
+    .cancel-btn {
+        background: #ddd;
+        color: var(--text);
+        padding: 0.8rem 2rem;
+        border: none;
+        border-radius: 8px;
+        cursor: pointer;
+    }
+
+    /* ========== RESPONSIVE ========== */
+    @@media (max-width: 768px) {
+        .navbar
+
+    {
+        padding: 1rem;
+        flex-direction: column;
+        gap: 1.5rem;
+    }
+
+    .orders-list {
+        padding: 0 1rem;
+    }
+
+    .order-card {
+        padding: 1.5rem;
+    }
+
+    .order-header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 1rem;
+    }
+
+    .order-footer {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 1rem;
+    }
+
+    }
+</style>

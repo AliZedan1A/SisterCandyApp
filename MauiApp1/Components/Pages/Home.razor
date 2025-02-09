@@ -1,0 +1,752 @@
+﻿@page "/"
+@using System.Globalization
+@using Domain.DataModels
+@using Domain.DataModels.ServerSide.Models.DatabaseModel
+@using Domain.Data_Transfare_Object
+@using MauiApp1.service.Interface
+@using System.Text
+@inject IJSRuntime JS
+@inject HttpClient Http
+@inject IApiService api
+
+<!-- نظام الإشعارات -->
+<div class="notification-container">
+    @if (showNotification)
+    {
+        <div class="notification @notificationType">
+            <span>@notificationMessage</span>
+            <i class="fas fa-times close-icon" @onclick="HideNotification"></i>
+        </div>
+    }
+</div>
+
+
+<!-- المحتوى الرئيسي -->
+<div class="container-fluid main-content">
+    <div class="header-box">
+        <h1 class="store-title">🍬 Sisters Candy 🍬</h1>
+        <p class="slogan">حلويات رمضان بأيدي حرفيات</p>
+    </div>
+    <div class="search-container animate__animated animate__fadeIn">
+        <div class="search-box">
+            <i class="fas fa-search search-icon"></i>
+            <input type="text"
+            class="search-input"
+            placeholder="ابحث عن الحلويات..."
+            @bind="searchQuery"
+            @oninput="HandleSearch" />
+            <div class="search-suggestions @(showSuggestions ? "show" : "")">
+                @foreach (var suggestion in searchSuggestions)
+                {
+                    <div class="suggestion-item" @onclick="() => SelectSuggestion(suggestion)">
+                        @suggestion
+                    </div>
+                }
+            </div>
+        </div>
+    </div>
+
+    <div class="row">
+        <!-- قسم الفئات -->
+        <div class="col-12 mb-4">
+            <div class="categories-scroll">
+                @foreach (var category in Categories)
+                {
+                    <button class="category-btn @(selectedCategory == category.Id ? "active" : "")"
+                    @onclick="() => FilterByCategory(category.Id)">
+                        @category.Title
+                    </button>
+                }
+            </div>
+        </div>
+
+        <!-- قسم المنتجات -->
+        <div class="col-lg-8">
+            <div class="row">
+                @if (FilteredProducts is null)
+                {
+                    <h1>This Category Is empty</h1>
+                }
+                else
+                {
+                    @foreach (var product in FilteredProducts)
+                    {
+                        <div class="col-md-4 mb-4">
+                            <div class="product-card">
+                                <div class="product-image" style="background-image: url('@product.Image')"></div>
+                                <div class="product-details">
+                                    <h3>@product.Name</h3>
+                                    <p class="price">@product.Price.ToString("C", CultureInfo.CreateSpecificCulture("he-IL"))</p>
+                                    <div class="quantity-control">
+                                        <input type="number" min="1" @bind="selectedQty" class="qty-input" />
+                                        <button class="add-to-cart" @onclick="(() => AddToCart(product))">
+                                            <i class="fas fa-cart-plus"></i> أضف
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    }
+                }
+            </div>
+        </div>
+
+        <!-- قسم الفاتورة المعدل -->
+        <div class="col-lg-4">
+            <div class="invoice-card">
+                <div class="invoice-header">
+                    <h4><i class="fas fa-receipt"></i> فاتورة الشراء</h4>
+                </div>
+                <div class="invoice-body">
+                    <div class="form-group">
+                        <label>تاريخ التسليم:</label>
+                        <input type="date" @bind="deliveryDate" class="form-control" />
+                    </div>
+
+                    <div class="form-group">
+                        <label>ملاحظات:</label>
+                        <textarea @bind="notes" class="form-control" rows="3"></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label>:اسم العميل</label>
+                        <textarea @bind="CustomerName" class="form-control" rows="1"></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label>:رقم الهاتف</label>
+                        <textarea @bind="PhonNumber" class="form-control" rows="1"></textarea>
+                    </div>
+
+                    <div class="invoice-items">
+                        @foreach (var item in Cart)
+                        {
+                            <div class="invoice-item">
+                                <span>@item.Product.Name</span>
+                                <div class="item-details">
+                                    <span>@item.Quantity x @item.Product.Price.ToString("C", CultureInfo.CreateSpecificCulture("he-IL"))</span>
+                                    <span>@((item.Quantity * item.Product.Price).ToString("C", CultureInfo.CreateSpecificCulture("he-IL")))</span>
+                                </div>
+                            </div>
+                        }
+                        <div class="invoice-header">
+                            <span>السعر الكلي</span>
+                            <div class="item-details">
+                                <span>@SubTotal.ToString("C", CultureInfo.CreateSpecificCulture("he-IL"))</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="invoice-summary">
+                        <!-- الملخص كما هو -->
+                    </div>
+
+                    <div class="invoice-actions">
+                        <button class="btn btn-primary" @onclick="SubmitOrder">
+                            <i class="fas fa-paper-plane"></i> إرسال الطلب
+                        </button>
+
+                        <button class="btn btn-secondary" @onclick="PrintInvoice">
+                            <i class="fas fa-print"></i> طباعة الفاتورة
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+    </div>
+</div>
+
+@code {
+    private bool isMenuOpen = false;
+    private bool showPagesMenu = false;
+    private int selectedQty = 1;
+    private string searchQuery = "";
+    private bool showSuggestions = false;
+    private List<string> searchSuggestions = new();
+    private int selectedCategory = 0;
+    private List<CandyData> Products = new();
+    private List<CartItem> Cart = new();
+    private DateTime deliveryDate = DateTime.Today;
+    private string notes = "";
+    private string CustomerName = "";
+    private string PhonNumber = "";
+    private bool showNotification = false;
+    private string notificationMessage = "";
+    private string notificationType = "success";
+    private System.Threading.Timer notificationTimer;
+
+    private async Task ShowNotification(string message, string type = "success", int duration = 3000)
+    {
+        notificationMessage = message;
+        notificationType = type;
+        showNotification = true;
+        StateHasChanged();
+
+        notificationTimer?.Dispose();
+        notificationTimer = new System.Threading.Timer(_ =>
+        {
+            InvokeAsync(() =>
+            {
+                showNotification = false;
+                StateHasChanged();
+            });
+        }, null, duration, Timeout.Infinite);
+    }
+
+    private void HideNotification()
+    {
+        showNotification = false;
+        notificationTimer?.Dispose();
+        StateHasChanged();
+    }
+    private async Task SubmitOrder()
+    {
+        if (string.IsNullOrWhiteSpace(CustomerName) || string.IsNullOrWhiteSpace(PhonNumber))
+        {
+            await ShowNotification("الرجاء إدخال اسم العميل ورقم الهاتف!", "error");
+            return;
+        }
+
+        var result = await api.AddOrder(new()
+        {
+            DeliveryDate = deliveryDate,
+            OrderDate = DateTime.Now,
+            Note = notes,
+            Status = "قيد التنفيذ",
+                Items = Cart.Select(item => new OrderItem
+                {
+                    Name = item.Product.Name,
+                    Price = item.Product.Price,
+                    Quantity = item.Quantity,
+                }).ToList(),
+                CustomerName = CustomerName,
+                PhoneNumber = PhonNumber
+
+        });
+        if (result.IsSucceeded)
+        {
+            await ShowNotification("تم إرسال الطلب بنجاح!", "success");
+            Cart.Clear();
+            deliveryDate = DateTime.Today;
+            notes = "";
+            CustomerName = "";
+            PhonNumber = "";
+            StateHasChanged();
+
+        }
+        else
+        {
+            await ShowNotification("حدث خطأ أثناء إرسال الطلب!", "error");
+        }
+    }
+
+    private async Task PrintInvoice()
+    {
+        await JS.InvokeVoidAsync("window.print");
+    }
+
+    private List<string> defaultSuggestions = new()
+    {
+        "بقلاوة",
+        "بقلاوة",
+        "بقلاوة كيك",
+        "بقلاوة رمضان",
+        "حلويات تقليدية"
+    };
+
+    private void HandleSearch()
+    {
+        showSuggestions = !string.IsNullOrWhiteSpace(searchQuery);
+
+        searchSuggestions = defaultSuggestions
+            .Where(s => s.Contains(searchQuery, StringComparison.OrdinalIgnoreCase))
+            .Take(5)
+            .ToList();
+    }
+
+    private void SelectSuggestion(string suggestion)
+    {
+        searchQuery = suggestion;
+        showSuggestions = false;
+    }
+
+    private List<CategoryData> Categories = new();
+
+    protected async override void OnInitialized()
+    {
+        var categories = await api.GetCategorys();
+        if (categories.IsSucceeded)
+        {
+            Categories = categories.Value;
+        }
+        var products = await api.GetCandies();
+        if (products.IsSucceeded)
+        {
+            Products = products.Value;
+        }
+        StateHasChanged();
+    }
+
+    private List<CandyData> FilteredProducts =>
+        selectedCategory == 0
+            ? Products
+            : GetCandilsByCategory(selectedCategory);
+
+    private void FilterByCategory(int categoryId) => selectedCategory = categoryId;
+
+    private List<CandyData> GetCandilsByCategory(int id)
+    {
+        List<CandyData> Ret = new();
+        try
+        {
+            Ret = Http.GetFromJsonAsync<List<CandyData>>($"Candy/GetCandisByCategory/{id}").Result;
+        }
+        catch
+        {
+            Ret = null;
+        }
+        return Ret;
+    }
+
+    private async void AddToCart(CandyData product)
+    {
+        var existingItem = Cart.FirstOrDefault(ci => ci.Product.Id == product.Id);
+        if (existingItem != null)
+        {
+            existingItem.Quantity += selectedQty;
+        }
+        else
+        {
+            Cart.Add(new CartItem { Product = product, Quantity = selectedQty });
+        }
+        selectedQty = 1;
+        await ShowNotification("تمت الإضافة إلى السلة بنجاح!", "success");
+
+    }
+
+    private decimal SubTotal => Cart.Sum(ci => ci.Product.Price * ci.Quantity);
+    private decimal Total => SubTotal;
+
+    public class CartItem
+    {
+        public CandyData Product { get; set; }
+        public int Quantity { get; set; }
+    }
+}
+
+<style>
+    /* أنماط الإشعارات */
+    .notification-container {
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        z-index: 9999;
+        max-width: 350px;
+        width: 100%;
+    }
+
+    .notification {
+        padding: 15px 20px;
+        border-radius: 8px;
+        color: white;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        animation: slideIn 0.3s ease-out;
+        margin-bottom: 10px;
+    }
+
+        .notification.success {
+            background: #4CAF50;
+            border-left: 5px solid #388E3C;
+        }
+
+        .notification.error {
+            background: #F44336;
+            border-left: 5px solid #D32F2F;
+        }
+
+    .close-icon {
+        cursor: pointer;
+        margin-left: 15px;
+        opacity: 0.8;
+        transition: opacity 0.2s;
+    }
+
+        .close-icon:hover {
+            opacity: 1;
+        }
+
+    @@keyframes slideIn {
+        from {
+            transform: translateX(100%);
+            opacity: 0;
+        }
+
+        to {
+            transform: translateX(0);
+            opacity: 1;
+        }
+    }
+
+    .container-fluid.main-content {
+        margin-top: 70px;
+    }
+
+    .header-box {
+        background: linear-gradient(135deg, #FF69B4, #FFB6C1);
+        padding: 2rem;
+        text-align: center;
+        border-radius: 15px;
+        margin: 20px;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+    }
+
+    .store-title {
+        color: white;
+        font-family: 'Dancing Script', cursive;
+        font-size: 3.5rem;
+        text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+    }
+
+    .slogan {
+        color: #98FB98;
+        font-size: 1.2rem;
+        margin-top: 10px;
+    }
+    /* تنسيقات محرك البحث */
+    .search-container {
+        max-width: 800px;
+        margin: 2rem auto;
+        position: relative;
+    }
+
+    .search-box {
+        position: relative;
+        width: 100%;
+        transition: all 0.3s ease;
+    }
+
+    .search-input {
+        width: 100%;
+        padding: 1.2rem 3rem 1.2rem 4rem;
+        border: 2px solid var(--primary-color);
+        border-radius: 50px;
+        font-size: 1.1rem;
+        transition: all 0.3s ease;
+        background: rgba(255,255,255,0.95);
+    }
+
+        .search-input:focus {
+            outline: none;
+            box-shadow: 0 0 15px rgba(255,105,180,0.2);
+            transform: scale(1.02);
+        }
+
+    .search-icon {
+        position: absolute;
+        left: 1.5rem;
+        top: 50%;
+        transform: translateY(-50%);
+        color: var(--primary-color);
+        font-size: 1.3rem;
+        z-index: 2;
+    }
+
+    .search-suggestions {
+        position: absolute;
+        top: 100%;
+        left: 0;
+        right: 0;
+        background: white;
+        border-radius: 15px;
+        box-shadow: 0 15px 30px rgba(0,0,0,0.1);
+        max-height: 0;
+        overflow: hidden;
+        transition: all 0.3s ease;
+        z-index: 1000;
+    }
+
+        .search-suggestions.show {
+            max-height: 300px;
+            margin-top: 1rem;
+            padding: 1rem 0;
+        }
+
+    .suggestion-item {
+        padding: 1rem 2rem;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        color: var(--text);
+    }
+
+        .suggestion-item:hover {
+            background: var(--accent-color);
+            color: white;
+            transform: translateX(10px);
+        }
+
+    /* تحسينات التجاوب */
+    @@media (max-width: 768px) {
+        .search-container {
+            margin: 1rem;
+        }
+
+        .search-input {
+            padding: 1rem 3rem 1rem 3.5rem;
+            font-size: 1rem;
+        }
+
+        .search-icon {
+            left: 1rem;
+            font-size: 1.1rem;
+        }
+
+        .search-suggestions.show {
+            margin-top: 0.5rem;
+        }
+    }
+
+    /* الألوان الرئيسية */
+    :root {
+        --primary-color: #FF69B4; /* وردي */
+        --secondary-color: #98FB98; /* أخضر فاتح */
+        --accent-color: #FFB6C1; /* وردي فاتح */
+    }
+
+    /* تصميم المحتوى الرئيسي */
+    .header-box {
+        background: linear-gradient(135deg, var(--primary-color), var(--accent-color));
+        padding: 2rem;
+        text-align: center;
+        border-radius: 15px;
+        margin: 20px;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+    }
+
+    .store-title {
+        color: white;
+        font-family: 'Dancing Script', cursive;
+        font-size: 3.5rem;
+        text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+    }
+
+    .slogan {
+        color: var(--secondary-color);
+        font-size: 1.2rem;
+        margin-top: 10px;
+    }
+
+    .categories-scroll {
+        display: flex;
+        gap: 10px;
+        overflow-x: auto;
+        padding: 10px 0;
+    }
+
+    .category-btn {
+        background: white;
+        border: 2px solid var(--primary-color);
+        color: var(--primary-color);
+        padding: 8px 20px;
+        border-radius: 25px;
+        transition: all 0.3s ease;
+        white-space: nowrap;
+    }
+
+        .category-btn.active {
+            background: var(--primary-color);
+            color: white;
+        }
+
+    .product-card {
+        background: white;
+        border-radius: 15px;
+        overflow: hidden;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+        transition: transform 0.3s ease;
+    }
+
+        .product-card:hover {
+            transform: translateY(-5px);
+        }
+
+    .product-image {
+        height: 250px;
+        background-size: cover;
+        background-position: center;
+    }
+
+    .product-details {
+        padding: 15px;
+        text-align: center;
+    }
+
+    .price {
+        color: var(--primary-color);
+        font-weight: bold;
+        font-size: 1.2rem;
+        margin: 10px 0;
+    }
+
+    .quantity-control {
+        display: flex;
+        gap: 10px;
+        justify-content: center;
+    }
+
+    .qty-input {
+        width: 60px;
+        text-align: center;
+        border: 1px solid var(--primary-color);
+        border-radius: 5px;
+        padding: 5px;
+    }
+
+    .add-to-cart {
+        background: var(--primary-color);
+        color: white;
+        border: none;
+        padding: 8px 20px;
+        border-radius: 20px;
+        cursor: pointer;
+        transition: background 0.3s ease;
+    }
+
+    .invoice-card {
+        background: white;
+        border-radius: 15px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+        padding: 20px;
+    }
+
+    .invoice-header {
+        background: var(--secondary-color);
+        color: white;
+        padding: 15px;
+        border-radius: 10px;
+        margin-bottom: 20px;
+    }
+
+    .invoice-item {
+        display: flex;
+        justify-content: space-between;
+        margin-bottom: 10px;
+        padding: 10px;
+        background: #f8f8f8;
+        border-radius: 8px;
+    }
+
+    .summary-row {
+        display: flex;
+        justify-content: space-between;
+        margin: 10px 0;
+        padding: 8px 0;
+        border-bottom: 1px solid #eee;
+    }
+
+    .total {
+        font-weight: bold;
+        color: var(--primary-color);
+        font-size: 1.1rem;
+    }
+
+    .print-btn {
+        background: var(--primary-color);
+        color: white;
+        width: 100%;
+        padding: 12px;
+        border: none;
+        border-radius: 25px;
+        margin-top: 20px;
+        cursor: pointer;
+    }
+
+    /* التجاوب مع الشاشات الصغيرة */
+    @@media (max-width: 992px) {
+        .navbar-collapse {
+            background: var(--primary-color);
+            padding: 1rem;
+            margin-top: 10px;
+            border-radius: 15px;
+        }
+
+        .search-box {
+            margin: 10px 0;
+        }
+
+        .dropdown-menu {
+            position: static !important;
+            transform: none !important;
+            background: rgba(255,255,255,0.9);
+        }
+
+        .store-title {
+            font-size: 2.5rem;
+        }
+    }
+
+    @@media print {
+        .navbar, button {
+            display: none !important;
+        }
+
+        .invoice-card {
+            box-shadow: none;
+            border: none;
+        }
+
+        .main-content {
+            margin-top: 0;
+        }
+    }
+
+    .invoice-actions {
+        display: flex;
+        gap: 10px;
+        margin-top: 20px;
+    }
+
+    .form-group {
+        margin-bottom: 15px;
+    }
+
+    .form-control {
+        width: 100%;
+        padding: 8px;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        font-size: 14px;
+    }
+
+    label {
+        display: block;
+        margin-bottom: 5px;
+        font-weight: bold;
+    }
+
+    .btn {
+        flex: 1;
+        padding: 12px;
+        border: none;
+        border-radius: 25px;
+        cursor: pointer;
+        transition: all 0.3s ease;
+    }
+
+    .btn-primary {
+        background: var(--primary-color);
+        color: white;
+    }
+
+    .btn-secondary {
+        background: #4CAF50;
+        color: white;
+    }
+</style>
+
+<script>
+    window.printPage = () => {
+        window.print();
+    }
+</script>
